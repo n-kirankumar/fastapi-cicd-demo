@@ -34,7 +34,6 @@ jobs:
           pip install -r requirements.txt
           echo "✅ Dependencies installed successfully."
 
-
   # ---------------- STAGE 2 ----------------
   lint:
     name: 2️⃣ Lint Code
@@ -51,7 +50,6 @@ jobs:
           flake8 app --max-line-length=120
           echo "✅ Linting passed successfully."
 
-
   # ---------------- STAGE 3 ----------------
   security:
     name: 3️⃣ Run Security Scan
@@ -67,7 +65,6 @@ jobs:
         run: |
           bandit -r app || true
           echo "✅ Bandit security scan completed."
-
 
   # ---------------- STAGE 4 ----------------
   test:
@@ -92,7 +89,6 @@ jobs:
           cd app
           pytest --maxfail=1 --disable-warnings -q
           echo "✅ Tests completed successfully."
-
 
   # ---------------- STAGE 5 ----------------
   build:
@@ -122,6 +118,11 @@ jobs:
           docker save -o image.tar ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           echo "✅ Docker image built and saved successfully."
 
+      - name: Upload Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastapi-image
+          path: image.tar
 
   # ---------------- STAGE 6 ----------------
   push:
@@ -130,6 +131,11 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fastapi-image
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -147,11 +153,10 @@ jobs:
 
       - name: Load and Push Docker Image
         run: |
-          ls -l image.tar  # Debug: check if image exists
+          ls -lh image.tar  # Debug check
           docker load -i image.tar
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           echo "✅ Docker image pushed successfully."
-
 
   # ---------------- STAGE 7 ----------------
   deploy:
@@ -181,7 +186,6 @@ jobs:
           kubectl set image deployment/fastapi-cicd-deploy fastapi-cicd=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} -n ${{ env.NAMESPACE }}
           kubectl rollout status deployment/fastapi-cicd-deploy -n ${{ env.NAMESPACE }}
           echo "✅ Deployment updated successfully."
-
 
   # ---------------- STAGE 8 ----------------
   verify:
