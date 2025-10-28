@@ -13,53 +13,114 @@ env:
   IMAGE: us-central1-docker.pkg.dev/test-teraform-vm/fastapi-repo/fastapi-cicd-demo
 
 jobs:
+  # ============================================================
+  # 1️⃣ BUILD JOB
+  # ============================================================
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 1️⃣ Checkout Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: 2️⃣ Set up Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: 3️⃣ Install Dependencies
+      - name: Install Dependencies
         run: |
           cd app
           python -m pip install --upgrade pip
           pip install -r ../requirements.txt
 
-      - name: 4️⃣ Run Unit Tests
+  # ============================================================
+  # 2️⃣ UNIT TEST JOB
+  # ============================================================
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Run Unit Tests
         run: |
-          pip install -r requirements.txt pytest
           cd app
+          pip install -r ../requirements.txt
+          pip install pytest
           pytest --maxfail=1 --disable-warnings -q
 
-      - name: 5️⃣ Run Linting (Flake8)
+  # ============================================================
+  # 3️⃣ LINTING JOB
+  # ============================================================
+  lint:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Flake8
         run: |
           pip install flake8
           flake8 app --max-line-length=120
 
-      - name: 6️⃣ Run Security Scan (Bandit)
+  # ============================================================
+  # 4️⃣ SECURITY SCAN JOB
+  # ============================================================
+  security:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run Bandit Security Scan
         run: |
           pip install bandit
           bandit -r app
 
-      - name: 7️⃣ Build and Push Docker Image
+  # ============================================================
+  # 5️⃣ BUILD DOCKER IMAGE
+  # ============================================================
+  docker_build:
+    runs-on: ubuntu-latest
+    needs: security
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Set up gcloud auth
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
           service_account_key: ${{ secrets.GCP_SA_KEY }}
           export_default_credentials: true
-      - run: |
+      - name: Build & Push Docker Image
+        run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
           docker build -t $IMAGE:${{ github.run_number }} .
           docker push $IMAGE:${{ github.run_number }}
           echo "IMAGE_TAG=${{ github.run_number }}" >> $GITHUB_ENV
 
-      - name: 8️⃣ Deploy to GKE
+  # ============================================================
+  # 6️⃣ DEPLOY TO GKE
+  # ============================================================
+  deploy:
+    runs-on: ubuntu-latest
+    needs: docker_build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+      - name: Deploy to GKE
         run: |
           gcloud container clusters get-credentials $CLUSTER_NAME --zone $REGION-a --project $PROJECT_ID
           kubectl set image deployment/fastapi-cicd-deploy fastapi-cicd=$IMAGE:${{ github.run_number }} -n fastapi-cicd-ns
