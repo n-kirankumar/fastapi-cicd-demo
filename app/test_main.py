@@ -6,5 +6,5 @@ client = TestClient(app)
 
 def test_root():
     response = client.get("/")
-    assert response.status_code == 200
-    assert response.json() == {"message": "FastAPI CI/CD working!"}
+    assert response.status_code == 200  # nosec
+    assert response.json() == {"message": "FastAPI CI/CD working!"}  # nosec
