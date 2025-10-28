@@ -1,8 +1,10 @@
-name: CI/CD Pipeline for FastAPI on GKE
+name: FastAPI CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
+  pull_request:
 
 env:
   PROJECT_ID: fastapi-gke-project
@@ -13,19 +15,16 @@ env:
   NAMESPACE: fastapi-cicd-ns
 
 jobs:
-  1️⃣-checkout:
-    name: 🧩 Step 1 - Checkout Code
+  # ---------------- STAGE 1 ----------------
+  install:
+    name: 1️⃣ Install Dependencies
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-  2️⃣-setup-python:
-    name: 🐍 Step 2 - Setup Python
-    runs-on: ubuntu-latest
-    needs: [1️⃣-checkout]
-    steps:
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -33,69 +32,118 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo "✅ Dependencies installed successfully."
 
-  3️⃣-run-tests:
-    name: 🧪 Step 3 - Run Tests
+
+  # ---------------- STAGE 2 ----------------
+  lint:
+    name: 2️⃣ Lint Code
     runs-on: ubuntu-latest
-    needs: [2️⃣-setup-python]
+    needs: install
     steps:
       - uses: actions/checkout@v4
-      - name: Run tests
-        run: pytest || echo "No tests found, skipping"
 
-  4️⃣-build-image:
-    name: 🐳 Step 4 - Build Docker Image
+      - name: Install Flake8
+        run: pip install flake8
+
+      - name: Run Flake8
+        run: |
+          flake8 app --max-line-length=120
+          echo "✅ Linting passed successfully."
+
+
+  # ---------------- STAGE 3 ----------------
+  security:
+    name: 3️⃣ Run Security Scan
     runs-on: ubuntu-latest
-    needs: [3️⃣-run-tests]
+    needs: lint
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit Scan
+        run: |
+          bandit -r app || true
+          echo "✅ Bandit security scan completed."
+
+
+  # ---------------- STAGE 4 ----------------
+  test:
+    name: 4️⃣ Run Unit Tests
+    runs-on: ubuntu-latest
+    needs: security
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run Pytest
+        run: |
+          cd app
+          pytest --maxfail=1 --disable-warnings -q
+          echo "✅ Tests completed successfully."
+
+
+  # ---------------- STAGE 5 ----------------
+  build:
+    name: 5️⃣ Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Setup gcloud
+      - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
-          install_components: "gke-gcloud-auth-plugin"
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+      - name: Configure Docker with Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: Build Docker Image
+      - name: Build Docker image
         run: |
           docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} .
-          docker save ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} -o image.tar
+          docker save -o image.tar ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          echo "✅ Docker image built and saved successfully."
 
-      - name: Upload Docker Image Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: image.tar
 
-  5️⃣-push-image:
-    name: 🚀 Step 5 - Push Docker Image to Artifact Registry
+  # ---------------- STAGE 6 ----------------
+  push:
+    name: 6️⃣ Push Docker Image
     runs-on: ubuntu-latest
-    needs: [4️⃣-build-image]
+    needs: build
     steps:
-      - name: Download built image
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
+      - uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Setup gcloud
+      - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+      - name: Configure Docker with Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Load and Push Docker Image
         run: |
@@ -103,44 +151,47 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           echo "✅ Docker image pushed successfully."
 
-  6️⃣-deploy-gke:
-    name: ☸️ Step 6 - Deploy to GKE
+
+  # ---------------- STAGE 7 ----------------
+  deploy:
+    name: 7️⃣ Deploy to GKE
     runs-on: ubuntu-latest
-    needs: [5️⃣-push-image]
+    needs: push
     steps:
       - uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Setup gcloud
+      - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
-          install_components: "gke-gcloud-auth-plugin"
+          install_components: "kubectl,gke-gcloud-auth-plugin"
 
-      - name: Get GKE Credentials
-        run: gcloud container clusters get-credentials ${{ env.CLUSTER_NAME }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }}
-
-      - name: Apply Kubernetes Manifests
+      - name: Connect to GKE cluster
         run: |
-          kubectl apply -f k8s/
-          kubectl rollout status deployment/${{ env.IMAGE_NAME }} -n ${{ env.NAMESPACE }}
+          gcloud container clusters get-credentials ${{ env.CLUSTER_NAME }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }}
 
-  7️⃣-verify-deploy:
-    name: 🔍 Step 7 - Verify Deployment
-    runs-on: ubuntu-latest
-    needs: [6️⃣-deploy-gke]
-    steps:
-      - name: Check service status
-        run: kubectl -n ${{ env.NAMESPACE }} get svc
+      - name: Update Deployment Image
+        run: |
+          kubectl set image deployment/fastapi-cicd-deploy fastapi-cicd=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} -n ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/fastapi-cicd-deploy -n ${{ env.NAMESPACE }}
+          echo "✅ Deployment updated successfully."
 
-  8️⃣-cleanup:
-    name: 🧹 Step 8 - Cleanup (Optional)
+
+  # ---------------- STAGE 8 ----------------
+  verify:
+    name: 8️⃣ Verify Deployment
     runs-on: ubuntu-latest
-    if: always()
+    needs: deploy
     steps:
-      - name: Cleanup workspace
-        run: rm -rf *
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          kubectl get pods -n ${{ env.NAMESPACE }}
+          kubectl get svc -n ${{ env.NAMESPACE }}
+          echo "✅ Deployment verification completed successfully."
 
