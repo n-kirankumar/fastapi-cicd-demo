@@ -42,10 +42,8 @@ jobs:
     needs: install
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Flake8
         run: pip install flake8
-
       - name: Run Flake8
         run: |
           flake8 app --max-line-length=120
@@ -59,10 +57,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Bandit
         run: pip install bandit
-
       - name: Run Bandit Scan
         run: |
           bandit -r app || true
@@ -76,17 +72,14 @@ jobs:
     needs: security
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
-
       - name: Run Pytest
         run: |
           cd app
@@ -101,7 +94,6 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -113,14 +105,20 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
 
       - name: Configure Docker with Artifact Registry
-        run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Build Docker image
         run: |
           docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} .
           docker save -o image.tar ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           echo "✅ Docker image built and saved successfully."
+
+      # ✅ Upload Docker image to share with next job
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
 
 
   # ---------------- STAGE 6 ----------------
@@ -131,6 +129,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ✅ Download Docker image from previous stage
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -142,11 +146,11 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
 
       - name: Configure Docker with Artifact Registry
-        run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Load and Push Docker Image
         run: |
+          ls -l image.tar  # debug: check if file exists
           docker load -i image.tar
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
           echo "✅ Docker image pushed successfully."
@@ -159,22 +163,18 @@ jobs:
     needs: push
     steps:
       - uses: actions/checkout@v4
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
           install_components: "kubectl,gke-gcloud-auth-plugin"
-
       - name: Connect to GKE cluster
         run: |
           gcloud container clusters get-credentials ${{ env.CLUSTER_NAME }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }}
-
       - name: Update Deployment Image
         run: |
           kubectl set image deployment/fastapi-cicd-deploy fastapi-cicd=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }} -n ${{ env.NAMESPACE }}
