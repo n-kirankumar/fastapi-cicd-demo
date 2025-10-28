@@ -1,4 +1,4 @@
-name: FastAPI CI/CD Pipeline (8 Stages with Dependency)
+name: FastAPI CI/CD Pipeline (8 Stages)
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.10
+          python-version: '3.10'   # ✅ Fixed here
 
       - name: Install Dependencies
         run: |
