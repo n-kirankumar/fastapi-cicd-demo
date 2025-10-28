@@ -6,4 +6,3 @@ app = FastAPI()
 @app.get("/")
 def root():
     return {"message": "FastAPI CI/CD working!"}
-
